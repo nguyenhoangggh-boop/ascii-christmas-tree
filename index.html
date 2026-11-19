@@ -21,46 +21,8 @@
       display: block;
       width: 100vw;
       height: 100vh;
+      touch-action: none;
     }
-    .hud {
-      position: fixed;
-      top: 16px;
-      left: 16px;
-      right: 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      pointer-events: none;
-      z-index: 10;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .badge {
-      background: rgba(12, 18, 34, 0.72);
-      border: 1px solid rgba(130, 180, 255, 0.22);
-      backdrop-filter: blur(8px);
-      padding: 8px 12px;
-      border-radius: 10px;
-      font-size: 12px;
-      color: #cbd8f0;
-    }
-    .controls {
-      pointer-events: auto;
-      display: flex;
-      gap: 8px;
-    }
-    button {
-      background: rgba(24, 38, 70, 0.85);
-      color: #f4f8ff;
-      border: 1px solid rgba(145, 195, 255, 0.35);
-      padding: 8px 12px;
-      border-radius: 10px;
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      transition: background 0.15s ease;
-    }
-    button:hover { background: rgba(45, 70, 125, 0.95); }
     .greeting {
       position: fixed;
       bottom: 24px;
@@ -70,6 +32,7 @@
       pointer-events: none;
       z-index: 10;
       text-shadow: 0 0 18px rgba(255, 215, 120, 0.45);
+      width: min(92vw, 900px);
     }
     .greeting h1 {
       font-size: clamp(18px, 3.2vw, 32px);
@@ -85,15 +48,6 @@
   </style>
 </head>
 <body>
-  <div class="hud">
-    <div class="badge">3D ASCII TREE • Kéo chuột để xoay • Cuộn để zoom</div>
-    <div class="controls">
-      <button id="soundBtn">Bật nhạc</button>
-      <button id="pauseBtn">Tạm dừng</button>
-      <button id="resetBtn">Đặt lại</button>
-    </div>
-  </div>
-
   <canvas id="scene"></canvas>
 
   <div class="greeting">
@@ -128,7 +82,7 @@
     const points = [];
     const tiers = 22;
     for (let t = 0; t < tiers; t++) {
-      const yNorm = t / (tiers - 1); // 0 (top) -> 1 (bottom)
+      const yNorm = t / (tiers - 1);
       const y = -2.2 + yNorm * 4.4;
       const maxR = 0.12 + yNorm * 1.85;
       const count = Math.floor(28 + yNorm * 110);
@@ -236,81 +190,103 @@
       zoom = Math.max(3.8, Math.min(10.5, zoom + e.deltaY * 0.003));
     }, { passive: false });
 
-    // --- Web Audio Synth ---
+    // --- Web Audio Synth: Jingle Bells (mặc định phát) ---
     let audioCtx = null;
-    let musicTimer = null;
-    let musicOn = false;
-    let stepIdx = 0;
+    let musicStarted = false;
+    let noteTimer = null;
+    let noteIdx = 0;
 
-    // Giai điệu gợi nhớ Last Christmas / mùa đông (D - Bm - Em - A)
-    const notes = [
-      587.33, 587.33, 523.25, 440.00, 392.00, 440.00, 587.33, 659.25,
-      587.33, 493.88, 440.00, 392.00, 329.63, 392.00, 493.88, 587.33,
-      659.25, 659.25, 587.33, 493.88, 440.00, 392.00, 329.63, 440.00,
-      440.00, 493.88, 587.33, 659.25, 587.33, 493.88, 440.00, 369.99
+    // [tần số Hz, độ dài tính theo phách (beat = 1)]
+    // E4=329.63, G4=392.00, A4=440.00, B4=493.88, C5=523.25, D5=587.33
+    const jingleBells = [
+      [329.63, 1], [329.63, 1], [329.63, 2],
+      [329.63, 1], [329.63, 1], [329.63, 2],
+      [329.63, 1], [392.00, 1], [261.63, 1.5], [293.66, 0.5], [329.63, 4],
+
+      [349.23, 1], [349.23, 1], [349.23, 1.5], [349.23, 0.5],
+      [349.23, 1], [329.63, 1], [329.63, 1], [329.63, 0.5], [329.63, 0.5],
+      [329.63, 1], [293.66, 1], [293.66, 1], [329.63, 1], [293.66, 2], [392.00, 2],
+
+      [329.63, 1], [329.63, 1], [329.63, 2],
+      [329.63, 1], [329.63, 1], [329.63, 2],
+      [329.63, 1], [392.00, 1], [261.63, 1.5], [293.66, 0.5], [329.63, 4],
+
+      [349.23, 1], [349.23, 1], [349.23, 1.5], [349.23, 0.5],
+      [349.23, 1], [329.63, 1], [329.63, 1], [329.63, 0.5], [329.63, 0.5],
+      [392.00, 1], [392.00, 1], [349.23, 1], [293.66, 1], [261.63, 4]
     ];
 
-    function playStep() {
-      if (!audioCtx || !musicOn) return;
+    const BEAT_MS = 340; // ~176 BPM cho nhịp điệu vui tươi
+
+    function scheduleNextNote() {
+      if (!audioCtx || !musicStarted) return;
+      const [freq, beats] = jingleBells[noteIdx % jingleBells.length];
+      noteIdx++;
+
       const now = audioCtx.currentTime;
-      const freq = notes[stepIdx % notes.length];
-      stepIdx++;
+      const durSec = (beats * BEAT_MS) / 1000;
 
       const osc = audioCtx.createOscillator();
+      const chime = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
+      const chimeGain = audioCtx.createGain();
+
       osc.type = "triangle";
       osc.frequency.setValueAtTime(freq, now);
 
+      chime.type = "sine";
+      chime.frequency.setValueAtTime(freq * 2, now);
+
       gain.gain.setValueAtTime(0.001, now);
-      gain.gain.exponentialRampToValueAtTime(0.06, now + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.36);
+      gain.gain.exponentialRampToValueAtTime(0.065, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0008, now + Math.max(0.12, durSec * 0.92));
+
+      chimeGain.gain.setValueAtTime(0.0005, now);
+      chimeGain.gain.exponentialRampToValueAtTime(0.018, now + 0.015);
+      chimeGain.gain.exponentialRampToValueAtTime(0.0003, now + Math.max(0.08, durSec * 0.5));
 
       osc.connect(gain);
+      chime.connect(chimeGain);
       gain.connect(audioCtx.destination);
+      chimeGain.connect(audioCtx.destination);
+
       osc.start(now);
-      osc.stop(now + 0.38);
+      osc.stop(now + durSec);
+      chime.start(now);
+      chime.stop(now + Math.min(durSec, 0.35));
+
+      noteTimer = setTimeout(scheduleNextNote, beats * BEAT_MS);
     }
 
-    const soundBtn = document.getElementById("soundBtn");
-    soundBtn.addEventListener("click", () => {
+    async function enableDefaultMusic() {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       }
-      if (audioCtx.state === "suspended") audioCtx.resume();
-      musicOn = !musicOn;
-      soundBtn.textContent = musicOn ? "Tắt nhạc" : "Bật nhạc";
-      clearInterval(musicTimer);
-      if (musicOn) {
-        playStep();
-        musicTimer = setInterval(playStep, 280);
+      if (audioCtx.state === "suspended") {
+        await audioCtx.resume();
       }
+      if (!musicStarted) {
+        musicStarted = true;
+        scheduleNextNote();
+      }
+    }
+
+    enableDefaultMusic().catch(() => {});
+    ["pointerdown", "keydown", "touchstart"].forEach((evt) => {
+      window.addEventListener(evt, () => {
+        if (!musicStarted) enableDefaultMusic().catch(() => {});
+      }, { passive: true });
     });
 
-    // --- Điều khiển & Vòng lặp ---
-    let paused = false;
+    // --- Vòng lặp ---
     let simTime = 0;
     let lastFrame = performance.now();
 
-    const pauseBtn = document.getElementById("pauseBtn");
-    pauseBtn.addEventListener("click", () => {
-      paused = !paused;
-      pauseBtn.textContent = paused ? "Tiếp tục" : "Tạm dừng";
-    });
-
-    document.getElementById("resetBtn").addEventListener("click", () => {
-      simTime = 0;
-      yaw = 0.4;
-      pitch = 0.12;
-      zoom = 6.2;
-    });
-
     function project(x, y, z) {
-      // Xoay quanh trục Y
       const cy = Math.cos(yaw), sy = Math.sin(yaw);
       let x1 = x * cy - z * sy;
       let z1 = x * sy + z * cy;
 
-      // Xoay quanh trục X
       const cp = Math.cos(pitch), sp = Math.sin(pitch);
       let y2 = y * cp - z1 * sp;
       let z2 = y * sp + z1 * cp;
@@ -330,18 +306,14 @@
     function render(now) {
       const dt = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
-      if (!paused) {
-        simTime += dt;
-        yaw += dt * 0.45;
-      }
+      simTime += dt;
+      yaw += dt * 0.45;
 
-      // Chữ chúc mừng gõ dần
       const typedLen = Math.min(customMsg.length, Math.floor(simTime * 11));
       msgEl.textContent = customMsg.slice(0, typedLen) + (typedLen < customMsg.length ? "_" : "");
 
       ctx.clearRect(0, 0, W, H);
 
-      // Sao trời
       for (const s of stars) {
         const alpha = 0.35 + 0.65 * Math.abs(Math.sin(simTime * 1.8 + s.tw));
         ctx.fillStyle = `rgba(220, 235, 255, ${alpha.toFixed(2)})`;
@@ -350,23 +322,19 @@
         ctx.fill();
       }
 
-      // Tuyết rơi
       ctx.font = "13px monospace";
       ctx.fillStyle = "rgba(215, 235, 255, 0.72)";
       for (const fl of snow) {
-        if (!paused) {
-          fl.y += fl.speed * dt;
-          fl.x += Math.sin(simTime * 1.4 + fl.drift) * 0.25 * dt;
-          if (fl.y > 3.5) {
-            fl.y = -3.8;
-            fl.x = (Math.random() - 0.5) * 10;
-          }
+        fl.y += fl.speed * dt;
+        fl.x += Math.sin(simTime * 1.4 + fl.drift) * 0.25 * dt;
+        if (fl.y > 3.5) {
+          fl.y = -3.8;
+          fl.x = (Math.random() - 0.5) * 10;
         }
         const p = project(fl.x, fl.y, fl.z);
         if (p) ctx.fillText("*", p.sx, p.sy);
       }
 
-      // Chiếu và sắp xếp theo độ sâu z
       const projected = [];
       for (const pt of points) {
         const p = project(pt.x, pt.y, pt.z);
@@ -389,7 +357,6 @@
       }
       ctx.shadowBlur = 0;
 
-      // Ngôi sao đỉnh cây
       const starProj = project(0, -2.42, 0);
       if (starProj) {
         const burst = Math.abs(Math.sin(simTime * 2.2)) > 0.94;
